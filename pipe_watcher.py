@@ -1,4 +1,4 @@
-import os, time
+import os
 
 class PipesWatcher:
     """ This class watches pipes and when there is data reads a line at a time and sends to the 
@@ -16,7 +16,10 @@ class PipesWatcher:
     def __del__(self):
         for pipe in self._pipes:
             pipe[0].close()
-            os.unlink(pipe[1])
+            try:
+                os.unlink(pipe[1])
+            except OSError:
+                pass
             
     def check(self, func):
         for pipe in self._pipes:
@@ -24,14 +27,3 @@ class PipesWatcher:
             if message:
                 func(message, pipe[1])
 
-
-def on_change(message, pipe):
-    if (message == "on"):
-        print ("It's On: " + pipe)
-    else:
-        print ("It's Off: " + pipe)
-
-my_input = PipesWatcher(["/tmp/mypipe1", "/tmp/mypipe2"])
-while True:
-    my_input.check(on_change)
-    time.sleep(1)
