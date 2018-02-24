@@ -7,65 +7,80 @@ import time
 import os_help
 import pipe_watcher
 
+#------------------------------------------------------------------------------
+# User Defined Variables:
+#------------------------------------------------------------------------------
+
+# Temporary area for us to create config files on-the-fly, etc.
 ramdisk="/dev/shm/"
 
+# Where we will store the captured videos
+video_store_path = "/tmp/video_storage"
+
+# Location where mask files are for the various cameras.
+# Mask file should use the format: " <camera name>.pgm"
+# see https://motion-project.github.io/motion_config.html#mask_file
+motion_mask_path = "~/motion_masks"
+
 # List of camera tuples, of (record stream, motion stream)
-cameras = [ ("rtsp://192.168.0.31:554/Streaming/Channels/1/", "rtsp://192.168.0.31:554/Streaming/Channels/2/") ]
-motion_fps = 1
+cameras = [ ("back",
+             "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/1/", 
+             "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/2/"),
+             ("front1",
+              "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/1/",
+              "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/") ]
+
+#------------------------------------------------------------------------------
+# End User Defined Variables ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#------------------------------------------------------------------------------
 
 # Global variable to store all our camera stuff
 camera_item = []
-video_path=ramdisk + "/video/"
-motion_is_active = False
+working_area=ramdisk + "surveillance/"
+motion_config_path=working_area + "motion_config/"
+unprocessed_videos=video_store_path + "/unprocessed"
 
 class CameraItems:
     """ Data structure for storing information about a single camera """
     def __init__(self, camera_index):
         print "running init"
+        self.camera_name = cameras[camera_index][0]
         self.capture_prefix = "cam" + str(camera_index)
-        self.capture_url = cameras[camera_index][0]
-        self.capture_path = video_path + str(camera_index)
+        self.capture_url = cameras[camera_index][1]
+        self.capture_path = unprocessed_videos + '/' + self.camera_name
         self.capture_process = None
         self.save_prefix = "save-"
-        self.monitor_url = cameras[camera_index][1]
-        self.monitor_jpg = ramdisk + "cam" + str(camera_index) + ".jpg"
-        self.pipe = ramdisk + "cam_motion_" + str(camera_index)
-        self.motion_process = None
+        self.monitor_url = cameras[camera_index][2]
+        self.pipe = working_area + "motion_pipe_cam" + str(camera_index + 1)
         self.motion_is_active = False
         self.motion_start_num = None
         
-        os_help.ignore_exist(os.mkdir, self.capture_path)
-        self.start_monitor()
+        os_help.ignore_exist(os.makedirs, self.capture_path)
+        self.write_motion_config()
         self.start_capture()
         
-    def cleanup(self):
-        # Stop ffmpeg monitor
-        try:
-            self.motion_process.terminate()
-        except:
-            pass
-        
+    def cleanup(self):       
         try:
             self.capture_process.terminate()
         except:
             pass
         
-        # Clean up the jpg's from ffmpeg
-        os_help.ignore_exist(os.unlink, self.monitor_jpg)
+        # Clean up the camera config (probably don't need this because the whole working area will be blown away
+        os_help.ignore_exist(os.unlink, motion_config_path + self.camera_name + '.cfg')
         
-        # Clean up captures, ignore errors
+        # TODO link the videos for motion or not first!
         shutil.rmtree(self.capture_path, True);
     
-    def start_monitor(self):
-        FNULL = open(os.devnull, 'w')
-        _cmd = ["ffmpeg", 
-                "-y", 
-                "-i", self.monitor_url,
-                "-r", str(motion_fps),
-                "-updatefirst", "1",
-                self.monitor_jpg]
-        self.motion_process = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
-        print "ffmpeg monitoring ", self.monitor_url, " pid: ", self.motion_process.pid
+    def write_motion_config(self):
+        thread_conf_file = open(motion_config_path + self.camera_name + '.cfg', 'w')
+        thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
+        maskFile = motion_mask_path + '/' + self.camera_name + '.pgm'
+        if os.path.isfile(maskFile):
+            thread_conf_file.write("mask_file " + maskFile + '\n')
+        
+        motion_conf_file = open(motion_config_path + 'motion.cfg', 'a')
+        motion_conf_file.write("thread " + thread_conf_file.name + '\n')
+        print "created motion config file: " + thread_conf_file.name
         
     def start_capture(self):
         FNULL = open(os.devnull, 'w')
@@ -80,6 +95,7 @@ class CameraItems:
         print "ffmpeg capturing ", self.capture_url, " pid: ", self.capture_process.pid
         
     def get_latest_capture_number(self):
+        # TODO this function needs to be revisited!
         _files = os.listdir(self.capture_path)
         _largest = NONE
         for _file in _files:
@@ -95,6 +111,7 @@ class CameraItems:
         return _largest
     
     def mark_capture_start(self):
+        # TODO this function needs to be revisited!
         latest = self.get_latest_capture_number()
         if (latest == NONE):
             return
@@ -103,6 +120,7 @@ class CameraItems:
             open(self.save_prefix + str(latest - 1), 'a').close()
             
     def get_capture_start_number(self):
+        # TODO this function needs to be revisited!
         _smallest = NONE
         for _file in os.listdir(self.capture_path):
             _s = _file.split("-")
@@ -116,6 +134,7 @@ class CameraItems:
         return _smallest
         
     def mark_capture_stop(self):
+        # TODO this function needs to be revisited!
         latest = self.get_latest_capture_number()
         start = get_capture_start_number()
         if (latest == NONE or start == NONE):
@@ -123,28 +142,41 @@ class CameraItems:
         for x in range(start + 1, latest + 1):
             open(self.save_prefix + str(x), 'a').close()
 
+def write_base_motion_config_file():
+    os_help.ignore_exist(os.makedirs, motion_config_path)
+    motion_conf_file = open(motion_config_path + 'motion.cfg', 'w')
+    motion_conf_file.write("rtsp_uses_tcp on\n")
+    # Don't capture anything with motion
+    motion_conf_file.write("output_pictures off\n")
+    motion_conf_file.write("on_event_start /home/pi/flagStart.bash %t\n")
+    motion_conf_file.write("on_event_end /home/pi/flagEnd.bash %t\n")
+    motion_conf_file.write("event_gap 15\n")
+    motion_conf_file.write("log_level 4\n")
+    motion_conf_file.write("\n")
+
 def on_change(message, pipe):
     is_on = (message == "on")
     state_change = True;
     for camera in camera_item:
         if camera.pipe == pipe:
-            camera.motion_is_active = is_on;
+            camera.motion_is_active = is_on
+            print "pipe called for camera: " + camera.camera_name + " msg: " + message
         elif camera.motion_is_active:
-            state_change = False;
-            break;
+            state_change = False
+            break
     
-    if state_change:
-        for camera in camera_item:
-            if is_on:
-                camera.mark_capture_start()
-            else:
-                camera.mark_capture_stop()
+#    if state_change:
+#        for camera in camera_item:
+#            if is_on:
+#                camera.mark_capture_start()
+#            else:
+#                camera.mark_capture_stop()
         
 def save_marked_files():
     print "Saving marked files"
 
 def initialize_cameras():
-    os_help.ignore_exist(os.mkdir, video_path)
+    write_base_motion_config_file()
     for index, camera in enumerate(cameras):
         _cam = CameraItems(index)
         camera_item.append(_cam)
@@ -156,6 +188,8 @@ def get_pipes():
     return _pipes
 
 try:
+    shutil.rmtree(working_area, True);
+    os_help.ignore_exist(os.makedirs, working_area)
     initialize_cameras()
     my_input = pipe_watcher.PipesWatcher(get_pipes())
 
@@ -172,6 +206,6 @@ try:
 finally:
     for camera in camera_item:
         camera.cleanup()
-        
-    shutil.rmtree(video_path, True);
+    
+    shutil.rmtree(unprocessed_videos, True);
     
