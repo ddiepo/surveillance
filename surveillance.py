@@ -43,7 +43,7 @@ motion_config_path=working_area + "motion_config/"
 video_unprocessed_dir=video_store_path + "/unprocessed"
 video_motion_dir="/motion"
 video_all_dir="/all"
-segment_length = 300 # seconds
+segment_length = 10 # seconds
 event_gap = 15  # time before or after motion
 motion_pid = None
 date_time_format = "%Y%m%d-%H%M%S%Z"
@@ -104,6 +104,9 @@ class CameraItems:
                 self.capture_path + "/" + self.camera_name + "." + date_time_format + ".mp4"]
         self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
         print "ffmpeg capturing ", self.capture_url, " pid: ", self.capture_process.pid
+        if (self.capture_process.poll() != None):
+            print "ffmpeg running for: " + self.camera_name
+            
         
     
     def mark_capture_start(self):
@@ -133,7 +136,7 @@ class CameraItems:
                    and not os.path.exists(motion_file_destination):
                     
                     os_help.ignore_exist(os.makedirs, os.path.dirname(motion_file_destination))
-                    os_help.ignore_exist(os.link(self.capture_path + "/" + _file, motion_file_destination))
+                    os_help.ignore_exist2(os.link(self.capture_path + "/" + _file, motion_file_destination))
             except:
                 traceback.print_exc()
             
@@ -148,7 +151,7 @@ class CameraItems:
                 date_stamp = segment_start_time.strftime('%Y.%m.%d')
                 destination = video_store_path + "/" + date_stamp + "/" + video_all_dir + "/" + _file
                 os_help.ignore_exist(os.makedirs, os.path.dirname(destination))
-                os_help.ignore_exist(os.link(self.capture_path + "/" + _file, destination))
+                os_help.ignore_exist2(os.link, self.capture_path + "/" + _file, destination)
                 
                 if (_file != newest_file):
                     os.unlink(self.capture_path + "/" + _file)
@@ -159,11 +162,13 @@ class CameraItems:
                 print "Exception happened"
             
     def restart_process_if_died(self):
-        print "TODO verify capture_pid is still running" # TODO
+        if self.capture_process.poll() != None:
+            print "Restarting dead capture process for " + self.camera_name
+            self.start_capture()
         
     def mark_capture_stop(self):
         process_segments()
-        this.motion_start_time = None
+        self.motion_start_time = None
 
 def write_base_motion_config_file():
     os_help.ignore_exist(os.makedirs, motion_config_path)
@@ -223,6 +228,10 @@ try:
                 camera.process_segments()
                 camera.restart_process_if_died()
             
+            if motion_pid.poll() != None:
+                print "Restarting dead motion process."
+                start_motion_detection()
+
         else:
             time.sleep(1)
 
@@ -231,5 +240,6 @@ finally:
     for camera in camera_item:
         camera.cleanup()
     
+    shutil.rmtree(motion_config_path, True);
     shutil.rmtree(video_unprocessed_dir, True);
     
