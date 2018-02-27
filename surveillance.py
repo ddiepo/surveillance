@@ -13,6 +13,7 @@ import pipe_watcher
 # User Defined Variables:
 #------------------------------------------------------------------------------
 
+_debug=True
 # Temporary area for us to create config files on-the-fly, etc.
 ramdisk="/dev/shm/"
 
@@ -72,11 +73,7 @@ class CameraItems:
         except:
             pass
         
-        # Clean up the camera config (probably don't need this because the whole working area will be blown away
-        os_help.ignore_exist(os.unlink, motion_config_path + self.camera_name + '.cfg')
-        
         self.process_segments()
-        shutil.rmtree(self.capture_path, True)
     
     def write_motion_config(self):
         thread_conf_file = open(motion_config_path + self.camera_name + '.cfg', 'w')
@@ -104,11 +101,9 @@ class CameraItems:
                 self.capture_path + "/" + self.camera_name + "." + date_time_format + ".mp4"]
         self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
         print "ffmpeg capturing ", self.capture_url, " pid: ", self.capture_process.pid
-        if (self.capture_process.poll() != None):
+        if (self.capture_process.poll() == None):
             print "ffmpeg running for: " + self.camera_name
             
-        
-    
     def mark_capture_start(self):
         self.motion_start_time = datetime.datetime.now()
         
@@ -205,12 +200,17 @@ def get_pipes():
     return _pipes
 
 def start_motion_detection():
+    global motion_pid
     FNULL = open(os.devnull, 'w')
     _cmd = ["motion", 
             "-c", motion_config_path + "/motion.cfg"]
-#    motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
+    motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
+    print "Starting motion: ", _cmd, "pid: ", motion_pid.pid
 
 try:
+    
+    shutil.rmtree(motion_config_path, True);
+    shutil.rmtree(video_unprocessed_dir, True);
     shutil.rmtree(working_area, True);
     os_help.ignore_exist(os.makedirs, working_area)
     initialize_cameras()
@@ -240,6 +240,7 @@ finally:
     for camera in camera_item:
         camera.cleanup()
     
-    shutil.rmtree(motion_config_path, True);
-    shutil.rmtree(video_unprocessed_dir, True);
+    if not _debug:
+        shutil.rmtree(motion_config_path, True);
+        shutil.rmtree(video_unprocessed_dir, True);
     
