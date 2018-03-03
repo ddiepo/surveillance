@@ -5,6 +5,7 @@ import shutil
 import datetime
 import time
 import traceback
+import syslog
 
 import os_help
 import pipe_watcher
@@ -26,12 +27,18 @@ video_store_path = "/tmp/video_storage"
 motion_mask_path = "~/motion_masks"
 
 # List of camera tuples, of (record stream, motion stream)
-cameras = [ ("back",
+cameras = [ ("back1",
              "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/1/", 
              "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/2/"),
              ("front1",
               "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/1/",
-              "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/") ]
+              "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/"),
+             ("front2",
+              "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/1/",
+              "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/"),
+             ("entry1",
+              "rtsp://view:3units3814@192.168.0.34:554/Streaming/Channels/1/",
+              "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/") ]
 
 #------------------------------------------------------------------------------
 # End User Defined Variables ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -44,7 +51,8 @@ motion_config_path=working_area + "motion_config/"
 video_unprocessed_dir=video_store_path + "/unprocessed"
 video_motion_dir="/motion"
 video_all_dir="/all"
-segment_length = 10 # seconds
+segment_length = 300 # seconds
+periodic_process_rate = 30 # seconds
 event_gap = 15  # time before or after motion
 motion_pid = None
 date_time_format = "%Y%m%d-%H%M%S%Z"
@@ -52,7 +60,6 @@ date_time_format = "%Y%m%d-%H%M%S%Z"
 class CameraItems:
     """ Data structure for storing information about a single camera """
     def __init__(self, camera_index):
-        print "running init"
         self.camera_name = cameras[camera_index][0]
         self.capture_url = cameras[camera_index][1]
         self.capture_path = video_unprocessed_dir + '/' + self.camera_name
@@ -77,20 +84,24 @@ class CameraItems:
     
     def write_motion_config(self):
         thread_conf_file = open(motion_config_path + self.camera_name + '.cfg', 'w')
+        thread_conf_file.write("log_level 4\n")
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
+        thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
+        thread_conf_file.write("on_event_start echo on > " + self.pipe + "\n")
+        thread_conf_file.write("on_event_end echo off %t " + self.camera_name + " > " + self.pipe + "\n")
         maskFile = motion_mask_path + '/' + self.camera_name + '.pgm'
         if os.path.isfile(maskFile):
             thread_conf_file.write("mask_file " + maskFile + '\n')
             
         motion_conf_file = open(motion_config_path + 'motion.cfg', 'a')
-        motion_conf_file.write("thread " + thread_conf_file.name + '\n')
+        motion_conf_file.write("camera " + thread_conf_file.name + '\n')
         print "created motion config file: " + thread_conf_file.name
 
     def start_capture(self):
         FNULL = open(os.devnull, 'w')
         _cmd = ["ffmpeg", 
                 "-rtsp_transport", "tcp",
-                "-stimeout", "500000",  # TCP Timeout for the stream
+                "-stimeout", "2000000",  # TCP Timeout for the stream
                 "-i", self.capture_url,
                 "-c", "copy",
                 "-f", "segment",
@@ -100,16 +111,15 @@ class CameraItems:
                 "-strftime", "1",
                 self.capture_path + "/" + self.camera_name + "." + date_time_format + ".mp4"]
         self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
-        print "ffmpeg capturing ", self.capture_url, " pid: ", self.capture_process.pid
-        if (self.capture_process.poll() == None):
-            print "ffmpeg running for: " + self.camera_name
+        syslog.syslog(2, "Capture started for: " + self.camera_name 
+                      + " cmd: " + str(_cmd) 
+                      + " pid: " + str(self.capture_process.pid))
             
     def mark_capture_start(self):
         self.motion_start_time = datetime.datetime.now()
         
     def process_segments(self):
         now = datetime.datetime.now()
-        print "Processing segments for: " + self.camera_name
         file_list = os.listdir(self.capture_path)
         newest_file = None
         newest_start_time = None
@@ -150,31 +160,28 @@ class CameraItems:
                 
                 if (_file != newest_file):
                     os.unlink(self.capture_path + "/" + _file)
-                else:
-                    print "Keeping the file currently being written to: " + _file
+        
             except:
                 traceback.print_exc()
                 print "Exception happened"
             
     def restart_process_if_died(self):
-        if self.capture_process.poll() != None:
-            print "Restarting dead capture process for " + self.camera_name
+        if self.capture_process.poll() != None:  
+            syslog.syslog(1, "ffmpeg capture process died, restarting: " + self.camera_name)
             self.start_capture()
         
     def mark_capture_stop(self):
-        process_segments()
+        self.process_segments()
         self.motion_start_time = None
 
 def write_base_motion_config_file():
     os_help.ignore_exist(os.makedirs, motion_config_path)
     motion_conf_file = open(motion_config_path + 'motion.cfg', 'w')
+    motion_conf_file.write("log_level 4\n")
     motion_conf_file.write("rtsp_uses_tcp on\n")
     # Don't capture anything with motion
     motion_conf_file.write("output_pictures off\n")
-    motion_conf_file.write("on_event_start /home/pi/flagStart.bash %t\n")
-    motion_conf_file.write("on_event_end /home/pi/flagEnd.bash %t\n")
     motion_conf_file.write("event_gap " + str(event_gap) + "\n")
-    motion_conf_file.write("log_level 4\n")
     motion_conf_file.write("\n")
 
 def on_change(message, pipe):
@@ -205,7 +212,8 @@ def start_motion_detection():
     _cmd = ["motion", 
             "-c", motion_config_path + "/motion.cfg"]
     motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
-    print "Starting motion: ", _cmd, "pid: ", motion_pid.pid
+    syslog.syslog(2, "Starting motion detection: " + str(_cmd) 
+                  + " pid: " + str(motion_pid.pid))
 
 try:
     
@@ -221,7 +229,7 @@ try:
     while True:
         my_input.check(on_change)
         now = datetime.datetime.now()
-        if (now - start_time) > datetime.timedelta(seconds=segment_length):
+        if (now - start_time) > datetime.timedelta(seconds=periodic_process_rate):
             start_time = now
             
             for camera in camera_item:
@@ -229,7 +237,7 @@ try:
                 camera.restart_process_if_died()
             
             if motion_pid.poll() != None:
-                print "Restarting dead motion process."
+                syslog.syslog(1, "motion process died, restarting.")
                 start_motion_detection()
 
         else:
@@ -237,6 +245,9 @@ try:
 
 finally:
     print "Shutting down..."
+    if motion_pid.poll() == None: 
+        motion_pid.kill()
+    
     for camera in camera_item:
         camera.cleanup()
     
