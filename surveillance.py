@@ -9,64 +9,26 @@ import syslog
 
 import os_help
 import pipe_watcher
+import disk_usage
+import surveillance_config as config
 
-#------------------------------------------------------------------------------
-# User Defined Variables:
-#------------------------------------------------------------------------------
 
 _debug=True
-# Temporary area for us to create config files on-the-fly, etc.
-ramdisk="/dev/shm/"
-
-# Where we will store the captured videos
-video_store_path = "/tmp/video_storage"
-
-# Location where mask files are for the various cameras.
-# Mask file should use the format: " <camera name>.pgm"
-# see https://motion-project.github.io/motion_config.html#mask_file
-motion_mask_path = "~/motion_masks"
-
-# List of camera tuples, of (record stream, motion stream)
-cameras = [ ("back1",
-             "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/1/", 
-             "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/2/"),
-             ("front1",
-              "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/1/",
-              "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/"),
-             ("front2",
-              "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/1/",
-              "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/"),
-             ("entry1",
-              "rtsp://view:3units3814@192.168.0.34:554/Streaming/Channels/1/",
-              "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/") ]
-
-#------------------------------------------------------------------------------
-# End User Defined Variables ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#------------------------------------------------------------------------------
 
 # Global variable to store all our camera stuff
 camera_item = []
-working_area=ramdisk + "surveillance/"
-motion_config_path=working_area + "motion_config/"
-video_unprocessed_dir=video_store_path + "/unprocessed"
-video_motion_dir="/motion"
-video_all_dir="/all"
-segment_length = 300 # seconds
-periodic_process_rate = 30 # seconds
-event_gap = 15  # time before or after motion
-motion_pid = None
-date_time_format = "%Y%m%d-%H%M%S%Z"
 
 class CameraItems:
     """ Data structure for storing information about a single camera """
     def __init__(self, camera_index):
-        self.camera_name = cameras[camera_index][0]
-        self.capture_url = cameras[camera_index][1]
-        self.capture_path = video_unprocessed_dir + '/' + self.camera_name
+        self.camera_name = config.cameras[camera_index].name
+        self.capture_url = config.cameras[camera_index].record_url
+        self.capture_path = (config.video_unprocessed_dir 
+                             + '/' + self.camera_name)
         self.capture_process = None
         self.save_prefix = "save-"
         self.motion_index = camera_index + 1
-        self.monitor_url = cameras[camera_index][2]
+        self.monitor_url = config.cameras[camera_index].monitor_url
         self.pipe = working_area + "motion_pipe_cam" + str(self.motion_index)
         self.motion_start_time = None
         
@@ -83,17 +45,20 @@ class CameraItems:
         self.process_segments()
     
     def write_motion_config(self):
-        thread_conf_file = open(motion_config_path + self.camera_name + '.cfg', 'w')
+        thread_conf_file = open(config.motion_config_path 
+                                + self.camera_name + '.cfg', 'w')
         thread_conf_file.write("log_level 4\n")
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
         thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
         thread_conf_file.write("on_event_start echo on > " + self.pipe + "\n")
-        thread_conf_file.write("on_event_end echo off %t " + self.camera_name + " > " + self.pipe + "\n")
-        maskFile = motion_mask_path + '/' + self.camera_name + '.pgm'
+        thread_conf_file.write("on_event_end echo off %t " + self.camera_name 
+                               + " > " + self.pipe + "\n")
+        maskFile = config.motion_mask_path + '/' + self.camera_name + '.pgm'
         if os.path.isfile(maskFile):
             thread_conf_file.write("mask_file " + maskFile + '\n')
             
-        motion_conf_file = open(motion_config_path + 'motion.cfg', 'a')
+        motion_conf_file = open(config.motion_config_path 
+                                + 'motion.cfg', 'a')
         motion_conf_file.write("camera " + thread_conf_file.name + '\n')
         print "created motion config file: " + thread_conf_file.name
 
@@ -105,12 +70,15 @@ class CameraItems:
                 "-i", self.capture_url,
                 "-c", "copy",
                 "-f", "segment",
-                "-segment_time", str(segment_length),
+                "-segment_time", str(
+                    config.segment_length.seconds),
                 "-segment_format", "mp4",
                 "-reset_timestamps", "1",
                 "-strftime", "1",
-                self.capture_path + "/" + self.camera_name + "." + date_time_format + ".mp4"]
-        self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
+                (self.capture_path + "/" + self.camera_name + "." 
+                 + config.date_time_format + ".mp4")]
+        self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, 
+                                                stderr=subprocess.STDOUT)
         syslog.syslog(2, "Capture started for: " + self.camera_name 
                       + " cmd: " + str(_cmd) 
                       + " pid: " + str(self.capture_process.pid))
@@ -119,6 +87,14 @@ class CameraItems:
         self.motion_start_time = datetime.datetime.now()
         
     def process_segments(self):
+        """ Mark video segments as having motion or not. 
+            All segments are linked to the "all" subdir,
+            segments with motion are also linked to the "motion" subdir.
+            Segments are removed from the "unprocessed" dir except if that
+            segment is still the currently-being-written-to segment. It would 
+            be safe to unlink that segment, but we leave it to make it easy 
+            to find that file.
+        """
         now = datetime.datetime.now()
         file_list = os.listdir(self.capture_path)
         newest_file = None
@@ -129,20 +105,34 @@ class CameraItems:
                 print "Unexpected pieces count: " + str(pieces)
                 continue
             try:
-                segment_start_time = datetime.datetime.strptime(pieces[len(pieces)-2], date_time_format)
-                if newest_start_time == None or segment_start_time > newest_start_time:
+                segment_start_time = datetime.datetime.strptime(
+                    pieces[len(pieces)-2], 
+                    config.date_time_format)
+                if (newest_start_time == None 
+                    or segment_start_time > newest_start_time):
                     newest_start_time = segment_start_time
                     newest_file = _file
-                date_stamp = segment_start_time.strftime('%Y.%m.%d')
-                motion_file_destination = video_store_path + "/" + date_stamp + "/" + video_motion_dir + "/" + _file
-                if self.motion_start_time != None \
-                   and (segment_start_time - datetime.timedelta(seconds=event_gap)) > self.motion_start_time \
-                   and (segment_start_time + datetime.timedelta(seconds=segment_length)) < now \
-                   and not os.path.exists(motion_file_destination):
+                date_stamp = segment_start_time.strftime(
+                    config.directory_date_format)
+                motion_file_destination = (
+                    config.video_store_path + "/" 
+                    + date_stamp + "/" 
+                    + config.video_motion_dir + "/" 
+                    + _file)
+                if (self.motion_start_time != None and 
+                    ((segment_start_time - config.event_gap) 
+                     > self.motion_start_time) and
+                    ((segment_start_time + config.segment_length) 
+                     < now) and
+                    not os.path.exists(motion_file_destination)):
                     
-                    os_help.ignore_exist(os.makedirs, os.path.dirname(motion_file_destination))
-                    os_help.ignore_exist2(os.link(self.capture_path + "/" + _file, motion_file_destination))
+                    os_help.ignore_exist(
+                        os.makedirs, os.path.dirname(motion_file_destination))
+                    os_help.ignore_exist2(
+                        os.link(self.capture_path + "/" + _file, 
+                                motion_file_destination))
             except:
+                syslog.syslog(1, traceback.format_exc())
                 traceback.print_exc()
             
         if newest_file == None:
@@ -152,22 +142,30 @@ class CameraItems:
         for _file in file_list:
             try:
                 pieces = _file.split('.')
-                segment_start_time = datetime.datetime.strptime(pieces[len(pieces)-2], date_time_format)
-                date_stamp = segment_start_time.strftime('%Y.%m.%d')
-                destination = video_store_path + "/" + date_stamp + "/" + video_all_dir + "/" + _file
-                os_help.ignore_exist(os.makedirs, os.path.dirname(destination))
-                os_help.ignore_exist2(os.link, self.capture_path + "/" + _file, destination)
+                segment_start_time = (
+                    datetime.datetime.strptime(
+                        pieces[len(pieces)-2], config.date_time_format))
+                date_stamp = (
+                    segment_start_time.strftime(config.directory_date_format))
+                destination = (
+                    config.video_store_path + "/" + date_stamp + "/" 
+                    + config.video_all_dir + "/" + _file)
+                os_help.ignore_exist(
+                    os.makedirs, os.path.dirname(destination))
+                os_help.ignore_exist2(
+                    os.link, self.capture_path + "/" + _file, destination)
                 
                 if (_file != newest_file):
                     os.unlink(self.capture_path + "/" + _file)
         
             except:
+                syslog.syslog(1, traceback.format_exc())
                 traceback.print_exc()
-                print "Exception happened"
             
     def restart_process_if_died(self):
         if self.capture_process.poll() != None:  
-            syslog.syslog(1, "ffmpeg capture process died, restarting: " + self.camera_name)
+            syslog.syslog(1, "ffmpeg capture process died, restarting: " 
+                          + self.camera_name)
             self.start_capture()
         
     def mark_capture_stop(self):
@@ -175,20 +173,22 @@ class CameraItems:
         self.motion_start_time = None
 
 def write_base_motion_config_file():
-    os_help.ignore_exist(os.makedirs, motion_config_path)
-    motion_conf_file = open(motion_config_path + 'motion.cfg', 'w')
+    motion_conf_file = open(config.motion_config_path + 'motion.cfg', 'w')
     motion_conf_file.write("log_level 4\n")
     motion_conf_file.write("rtsp_uses_tcp on\n")
     # Don't capture anything with motion
     motion_conf_file.write("output_pictures off\n")
-    motion_conf_file.write("event_gap " + str(event_gap) + "\n")
+    motion_conf_file.write("event_gap " 
+                           + str(config.event_gap.seconds) + "\n")
     motion_conf_file.write("\n")
 
 def on_change(message, pipe):
     is_on = (message == "on")
     for camera in camera_item:
-        if camera.pipe == pipe and (camera.motion_start_time != None) != is_on:
-            print "pipe called for camera: " + camera.camera_name + " msg: " + message
+        if (camera.pipe == pipe and 
+            (camera.motion_start_time != None) != is_on):
+            print ("pipe called for camera: " + camera.camera_name 
+                   + " msg: " + message)
             if is_on:
                 camera.mark_capture_start()
             else:
@@ -196,7 +196,7 @@ def on_change(message, pipe):
 
 def initialize_cameras():
     write_base_motion_config_file()
-    for index, camera in enumerate(cameras):
+    for index, camera in enumerate(config.cameras):
         _cam = CameraItems(index)
         camera_item.append(_cam)
 
@@ -210,26 +210,32 @@ def start_motion_detection():
     global motion_pid
     FNULL = open(os.devnull, 'w')
     _cmd = ["motion", 
-            "-c", motion_config_path + "/motion.cfg"]
+            "-c", config.motion_config_path + "/motion.cfg"]
     motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
     syslog.syslog(2, "Starting motion detection: " + str(_cmd) 
                   + " pid: " + str(motion_pid.pid))
 
 try:
-    
-    shutil.rmtree(motion_config_path, True);
-    shutil.rmtree(video_unprocessed_dir, True);
-    shutil.rmtree(working_area, True);
-    os_help.ignore_exist(os.makedirs, working_area)
+    config.initiailize()
+    shutil.rmtree(config.working_area, True);
+    shutil.rmtree(config.motion_config_path, True);
+    shutil.rmtree(config.video_unprocessed_dir, True);
+    os_help.ignore_exist(os.makedirs, config.motion_config_path)
     initialize_cameras()
     my_input = pipe_watcher.PipesWatcher(get_pipes())
     start_motion_detection()
 
     start_time = datetime.datetime.now()
+    space_check_time = datetime.datetime(0)
     while True:
         my_input.check(on_change)
         now = datetime.datetime.now()
-        if (now - start_time) > datetime.timedelta(seconds=periodic_process_rate):
+        if (now - space_check_time) > config.space_check_rate:
+            disk_usage.cleanup(
+                days_to_keep_all=datetime.timedelta(minutes=30), 
+                max_space_to_use=3.5 * 1024 * 1024 * 1024 * 1024)
+        
+        if (now - start_time) > config.periodic_process_rate:
             start_time = now
             
             for camera in camera_item:
@@ -252,6 +258,6 @@ finally:
         camera.cleanup()
     
     if not _debug:
-        shutil.rmtree(motion_config_path, True);
-        shutil.rmtree(video_unprocessed_dir, True);
+        shutil.rmtree(config.motion_config_path, True);
+        shutil.rmtree(config.video_unprocessed_dir, True);
     
