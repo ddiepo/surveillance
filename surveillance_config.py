@@ -1,5 +1,6 @@
 import datetime
 from collections import namedtuple
+import os
 
 #------------------------------------------------------------------------------
 # User Defined Variables:
@@ -43,6 +44,7 @@ cameras = [
 
 video_motion_dir="motion"
 video_all_dir="all"
+video_unprocessed_dir="unprocessed"
 
 segment_length = datetime.timedelta(seconds=300)
 periodic_process_rate = datetime.timedelta(seconds=30)
@@ -50,14 +52,13 @@ space_check_rate = datetime.timedelta(days=1)
 event_gap = datetime.timedelta(seconds=15)  # time before or after motion
 date_time_format = "%Y%m%d-%H%M%S%Z"
 directory_date_format = "%Y.%m.%d"
-duration_to_keep_all_segments = datetime.timedelta(minutes=30) # TODO revise this
+duration_to_keep_all_segments = datetime.timedelta(days=14) # TODO revise this
 disk_usage_limit_bytes = (3 * 1024 * 1024 * 1024 * 1024)
-
 
 def init():
     global working_area
     global motion_config_path
-    global video_unprocessed_dir
-    working_area=ramdisk + "surveillance/"
-    motion_config_path=working_area + "motion_config/"
-    video_unprocessed_dir=video_store_path + "/unprocessed"
+    global video_unprocessed_path
+    working_area=os.path.join(ramdisk, "surveillance")
+    motion_config_path=os.path.join(working_area, "motion_config")
+    video_unprocessed_path=os.path.join(video_store_path, video_unprocessed_dir)

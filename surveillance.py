@@ -1,19 +1,17 @@
-import os
-import re
-import subprocess
-import shutil
 import datetime
+import os
+import shutil
+import subprocess
+import syslog
 import time
 import traceback
-import syslog
 
 import os_help
 import pipe_watcher
 import disk_usage
 import surveillance_config as config
 
-
-_debug=True
+_debug=False
 
 # Global variable to store all our camera stuff
 camera_item = []
@@ -24,14 +22,14 @@ class CameraItems:
     def __init__(self, camera_index):
         self.camera_name = config.cameras[camera_index].name
         self.capture_url = config.cameras[camera_index].record_url
-        self.capture_path = (config.video_unprocessed_dir 
-                             + '/' + self.camera_name)
+        self.capture_path = os.path.join(
+            config.video_unprocessed_path, self.camera_name)
         self.capture_process = None
         self.save_prefix = "save-"
         self.motion_index = camera_index + 1
         self.monitor_url = config.cameras[camera_index].monitor_url
-        self.pipe = (config.working_area + "motion_pipe_cam" 
-                     + str(self.motion_index))
+        self.pipe = os.path.join(
+            config.working_area, "motion_pipe_cam" + str(self.motion_index))
         self.motion_start_time = None
         
         os_help.ignore_exist(os.makedirs, self.capture_path)
@@ -47,8 +45,8 @@ class CameraItems:
         self.process_segments()
     
     def write_motion_config(self):
-        thread_conf_file = open(config.motion_config_path 
-                                + self.camera_name + '.cfg', 'w')
+        thread_conf_file = open(os.path.join(
+            config.motion_config_path, self.camera_name + '.cfg'), 'w')
         thread_conf_file.write("log_level 4\n")
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
         thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
@@ -59,10 +57,9 @@ class CameraItems:
         if os.path.isfile(maskFile):
             thread_conf_file.write("mask_file " + maskFile + '\n')
             
-        motion_conf_file = open(config.motion_config_path 
-                                + 'motion.cfg', 'a')
+        motion_conf_file = open(os.path.join(
+            config.motion_config_path, 'motion.cfg'), 'a')
         motion_conf_file.write("camera " + thread_conf_file.name + '\n')
-        print "created motion config file: " + thread_conf_file.name
 
     def start_capture(self):
         FNULL = open(os.devnull, 'w')
@@ -176,7 +173,8 @@ class CameraItems:
         self.motion_start_time = None
 
 def write_base_motion_config_file():
-    motion_conf_file = open(config.motion_config_path + 'motion.cfg', 'w')
+    motion_conf_file = open(os.path.join(
+        config.motion_config_path, 'motion.cfg'), 'w')
     motion_conf_file.write("log_level 4\n")
     motion_conf_file.write("rtsp_uses_tcp on\n")
     # Don't capture anything with motion
@@ -190,8 +188,6 @@ def on_change(message, pipe):
     for camera in camera_item:
         if (camera.pipe == pipe and 
             (camera.motion_start_time != None) != is_on):
-            print ("pipe called for camera: " + camera.camera_name 
-                   + " msg: " + message)
             if is_on:
                 camera.mark_capture_start()
             else:
@@ -213,7 +209,7 @@ def start_motion_detection():
     global motion_pid
     FNULL = open(os.devnull, 'w')
     _cmd = ["motion", 
-            "-c", config.motion_config_path + "/motion.cfg"]
+            "-c", os.path.join(config.motion_config_path, "motion.cfg")]
     motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
     syslog.syslog(2, "Starting motion detection: " + str(_cmd) 
                   + " pid: " + str(motion_pid.pid))
@@ -222,7 +218,7 @@ try:
     config.init()
     shutil.rmtree(config.working_area, True)
     shutil.rmtree(config.motion_config_path, True)
-    shutil.rmtree(config.video_unprocessed_dir, True)
+    shutil.rmtree(config.video_unprocessed_path, True)
     os_help.ignore_exist(os.makedirs, config.motion_config_path)
     initialize_cameras()
     my_input = pipe_watcher.PipesWatcher(get_pipes())
@@ -234,6 +230,7 @@ try:
         my_input.check(on_change)
         now = datetime.datetime.now()
         if (now - space_check_time) > config.space_check_rate:
+            space_check_time = now;
             disk_usage.cleanup()
         
         if (now - start_time) > config.periodic_process_rate:
@@ -260,5 +257,5 @@ finally:
     
     if not _debug:
         shutil.rmtree(config.motion_config_path, True);
-        shutil.rmtree(config.video_unprocessed_dir, True);
+        shutil.rmtree(config.video_unprocessed_path, True);
     
