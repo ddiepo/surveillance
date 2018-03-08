@@ -20,38 +20,41 @@ motion_mask_path = "~/motion_masks"
 Camera = namedtuple("Camera", ['name', 'record_url', 'monitor_url'])
 # TODO parse from csv: https://docs.python.org/2/library/collections.html#collections.namedtuple
 cameras = [ 
-#    Camera(
-#        "back1",
-#        "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/1/",
-#        "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/2/"),
-#    Camera(
-#        "front1",
-#        "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/1/",
-#        "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/"),
+    Camera(
+        "back1",
+        "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/2/",
+        "rtsp://view:3units3814@192.168.0.31:554/Streaming/Channels/2/"),
+    Camera(
+        "front1",
+        "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/",
+        "rtsp://view:3units3814@192.168.0.32:554/Streaming/Channels/2/"),
     Camera(
         "front2",
-        "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/1/",
+        "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/",
         "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/"),
     Camera(
         "entry1",
-        "rtsp://view:3units3814@192.168.0.34:554/Streaming/Channels/1/",
+        "rtsp://view:3units3814@192.168.0.34:554/Streaming/Channels/2/",
         "rtsp://view:3units3814@192.168.0.33:554/Streaming/Channels/2/") ]
 
 #------------------------------------------------------------------------------
 # End User Defined Variables ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 #------------------------------------------------------------------------------
 
-video_motion_dir="/motion"
-video_all_dir="/all"
+video_motion_dir="motion"
+video_all_dir="all"
 
-segment_length =  datetime.timedelta(seconds=300)
-periodic_process_rate =  datetime.timedelta(seconds=30)
+segment_length = datetime.timedelta(seconds=300)
+periodic_process_rate = datetime.timedelta(seconds=30)
 space_check_rate = datetime.timedelta(days=1)
 event_gap = datetime.timedelta(seconds=15)  # time before or after motion
 date_time_format = "%Y%m%d-%H%M%S%Z"
 directory_date_format = "%Y.%m.%d"
+duration_to_keep_all_segments = datetime.timedelta(minutes=30) # TODO revise this
+disk_usage_limit_bytes = (3 * 1024 * 1024 * 1024 * 1024)
 
-def initialize():
+
+def init():
     global working_area
     global motion_config_path
     global video_unprocessed_dir

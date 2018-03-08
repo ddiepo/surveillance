@@ -17,6 +17,7 @@ _debug=True
 
 # Global variable to store all our camera stuff
 camera_item = []
+motion_pid = None
 
 class CameraItems:
     """ Data structure for storing information about a single camera """
@@ -29,7 +30,8 @@ class CameraItems:
         self.save_prefix = "save-"
         self.motion_index = camera_index + 1
         self.monitor_url = config.cameras[camera_index].monitor_url
-        self.pipe = working_area + "motion_pipe_cam" + str(self.motion_index)
+        self.pipe = (config.working_area + "motion_pipe_cam" 
+                     + str(self.motion_index))
         self.motion_start_time = None
         
         os_help.ignore_exist(os.makedirs, self.capture_path)
@@ -112,31 +114,32 @@ class CameraItems:
                     or segment_start_time > newest_start_time):
                     newest_start_time = segment_start_time
                     newest_file = _file
+                    
                 date_stamp = segment_start_time.strftime(
                     config.directory_date_format)
-                motion_file_destination = (
-                    config.video_store_path + "/" 
-                    + date_stamp + "/" 
-                    + config.video_motion_dir + "/" 
-                    + _file)
+                motion_file = os.path.join(
+                    config.video_store_path, date_stamp, 
+                    config.video_motion_dir, _file)
+                
                 if (self.motion_start_time != None and 
-                    ((segment_start_time - config.event_gap) 
-                     > self.motion_start_time) and
-                    ((segment_start_time + config.segment_length) 
-                     < now) and
-                    not os.path.exists(motion_file_destination)):
+                    (self.motion_start_time - config.event_gap <
+                     segment_start_time) and
+                    segment_start_time < now and
+                    not os.path.exists(motion_file)):
                     
                     os_help.ignore_exist(
-                        os.makedirs, os.path.dirname(motion_file_destination))
+                        os.makedirs, os.path.dirname(motion_file))
                     os_help.ignore_exist2(
-                        os.link(self.capture_path + "/" + _file, 
-                                motion_file_destination))
+                        os.link, 
+                        os.path.join(self.capture_path, _file), 
+                        motion_file)
+                    
             except:
                 syslog.syslog(1, traceback.format_exc())
                 traceback.print_exc()
             
         if newest_file == None:
-            print "No newest file?  Odd, but okay... bailing out"
+            print "No newest file for: " + self.camera_name
             return
         
         for _file in file_list:
@@ -216,24 +219,22 @@ def start_motion_detection():
                   + " pid: " + str(motion_pid.pid))
 
 try:
-    config.initiailize()
-    shutil.rmtree(config.working_area, True);
-    shutil.rmtree(config.motion_config_path, True);
-    shutil.rmtree(config.video_unprocessed_dir, True);
+    config.init()
+    shutil.rmtree(config.working_area, True)
+    shutil.rmtree(config.motion_config_path, True)
+    shutil.rmtree(config.video_unprocessed_dir, True)
     os_help.ignore_exist(os.makedirs, config.motion_config_path)
     initialize_cameras()
     my_input = pipe_watcher.PipesWatcher(get_pipes())
     start_motion_detection()
 
     start_time = datetime.datetime.now()
-    space_check_time = datetime.datetime(0)
+    space_check_time = start_time - config.space_check_rate
     while True:
         my_input.check(on_change)
         now = datetime.datetime.now()
         if (now - space_check_time) > config.space_check_rate:
-            disk_usage.cleanup(
-                days_to_keep_all=datetime.timedelta(minutes=30), 
-                max_space_to_use=3.5 * 1024 * 1024 * 1024 * 1024)
+            disk_usage.cleanup()
         
         if (now - start_time) > config.periodic_process_rate:
             start_time = now
@@ -251,7 +252,7 @@ try:
 
 finally:
     print "Shutting down..."
-    if motion_pid.poll() == None: 
+    if motion_pid != None and motion_pid.poll() == None: 
         motion_pid.kill()
     
     for camera in camera_item:

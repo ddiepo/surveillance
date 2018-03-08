@@ -23,11 +23,3 @@ def ignore_exist2(func, src, dest):
         else:
             raise
         
-def get_dir_size(path):
-    """ Gets size of all files in the directory, does not recurse. """
-    total_size = 0
-    for dirpath, dirnames, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            total_size += os.path.getsize(fp)
-    return total_size
