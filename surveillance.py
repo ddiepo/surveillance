@@ -1,7 +1,9 @@
 import datetime
 import os
+import signal
 import shutil
 import subprocess
+import sys
 import syslog
 import time
 import traceback
@@ -213,9 +215,13 @@ def start_motion_detection():
     motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
     syslog.syslog(2, "Starting motion detection: " + str(_cmd) 
                   + " pid: " + str(motion_pid.pid))
+    
+def sighandler(signum, frame):
+    sys.exit("caught signal: " + str(signum));
 
 try:
     config.init()
+    signal.signal(signal.SIGTERM, sighandler)
     shutil.rmtree(config.working_area, True)
     shutil.rmtree(config.motion_config_path, True)
     shutil.rmtree(config.video_unprocessed_path, True)
@@ -246,6 +252,10 @@ try:
 
         else:
             time.sleep(1)
+            
+except:
+    traceback.print_exc()
+    syslog.syslog(1, traceback.format_exc())
 
 finally:
     print "Shutting down..."
@@ -258,4 +268,3 @@ finally:
     if not _debug:
         shutil.rmtree(config.motion_config_path, True);
         shutil.rmtree(config.video_unprocessed_path, True);
-    
