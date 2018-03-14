@@ -37,6 +37,7 @@ class CameraItems:
         os_help.ignore_exist(os.makedirs, self.capture_path)
         self.write_motion_config()
         self.start_capture()
+        print "Monitoring Camera: " + self.camera_name
         
     def cleanup(self):       
         try:
@@ -50,14 +51,15 @@ class CameraItems:
         thread_conf_file = open(os.path.join(
             config.motion_config_path, self.camera_name + '.cfg'), 'w')
         thread_conf_file.write("log_level 4\n")
+        thread_conf_file.write("threshold 500\n") # default 1500
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
         thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
         thread_conf_file.write("on_event_start echo on > " + self.pipe + "\n")
         thread_conf_file.write("on_event_end echo off %t " + self.camera_name 
                                + " > " + self.pipe + "\n")
-        maskFile = config.motion_mask_path + '/' + self.camera_name + '.pgm'
-        if os.path.isfile(maskFile):
-            thread_conf_file.write("mask_file " + maskFile + '\n')
+        maskfile = config.motion_mask_path + '/' + self.camera_name + '.pgm'
+        if os.path.isfile(maskfile):
+            thread_conf_file.write("mask_file " + maskfile + '\n')
             
         motion_conf_file = open(os.path.join(
             config.motion_config_path, 'motion.cfg'), 'a')
@@ -179,7 +181,7 @@ def write_base_motion_config_file():
         config.motion_config_path, 'motion.cfg'), 'w')
     motion_conf_file.write("log_level 4\n")
     motion_conf_file.write("rtsp_uses_tcp on\n")
-    # Don't capture anything with motion
+    # Don't use the motion process to capture:
     motion_conf_file.write("output_pictures off\n")
     motion_conf_file.write("event_gap " 
                            + str(config.event_gap.seconds) + "\n")
@@ -220,7 +222,7 @@ def sighandler(signum, frame):
     sys.exit("caught signal: " + str(signum));
 
 try:
-    config.init()
+    config.init(sys.argv[1])
     signal.signal(signal.SIGTERM, sighandler)
     shutil.rmtree(config.working_area, True)
     shutil.rmtree(config.motion_config_path, True)
@@ -265,6 +267,10 @@ finally:
     for camera in camera_item:
         camera.cleanup()
     
-    if not _debug:
-        shutil.rmtree(config.motion_config_path, True);
-        shutil.rmtree(config.video_unprocessed_path, True);
+    try:
+        if not _debug:
+            shutil.rmtree(config.motion_config_path, True)
+            shutil.rmtree(config.video_unprocessed_path, True)
+    except:
+        print "Oops, couldn't cleanup"
+
