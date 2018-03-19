@@ -200,7 +200,7 @@ def write_base_motion_config_file():
 
 def on_change(message, pipe):
     global eventlog
-    is_on = (message.split(' ', 1)[0] == "on")
+    is_on = (message.split(None, 1)[0] == "on")
     now = datetime.datetime.now()
     for camera in camera_item:
         if (camera.pipe == pipe):
