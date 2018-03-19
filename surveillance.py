@@ -11,6 +11,7 @@ import traceback
 import os_help
 import pipe_watcher
 import disk_usage
+import log_writer
 import surveillance_config as config
 
 _debug=False
@@ -18,14 +19,15 @@ _debug=False
 # Global variable to store all our camera stuff
 camera_item = []
 motion_pid = None
+eventlog = log_writer.LogWriter()
 
 class CameraItems:
     """ Data structure for storing information about a single camera """
     def __init__(self, camera_index):
-        self.camera_name = config.cameras[camera_index].name
+        self.name = config.cameras[camera_index].name
         self.capture_url = config.cameras[camera_index].record_url
         self.capture_path = os.path.join(
-            config.video_unprocessed_path, self.camera_name)
+            config.video_unprocessed_path, self.name)
         self.capture_process = None
         self.save_prefix = "save-"
         self.motion_index = camera_index + 1
@@ -37,7 +39,7 @@ class CameraItems:
         os_help.ignore_exist(os.makedirs, self.capture_path)
         self.write_motion_config()
         self.start_capture()
-        print "Monitoring Camera: " + self.camera_name
+        print "Monitoring Camera: " + self.name
         
     def cleanup(self):       
         try:
@@ -45,19 +47,21 @@ class CameraItems:
         except:
             pass
         
-        self.process_segments()
+        self.process_segments(datetime.datetime.now())
     
     def write_motion_config(self):
         thread_conf_file = open(os.path.join(
-            config.motion_config_path, self.camera_name + '.cfg'), 'w')
+            config.motion_config_path, self.name + '.cfg'), 'w')
         thread_conf_file.write("log_level 4\n")
-        thread_conf_file.write("threshold 500\n") # default 1500
+        thread_conf_file.write("threshold 400\n") # default 1500
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
         thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
-        thread_conf_file.write("on_event_start echo on > " + self.pipe + "\n")
-        thread_conf_file.write("on_event_end echo off %t " + self.camera_name 
-                               + " > " + self.pipe + "\n")
-        maskfile = config.motion_mask_path + '/' + self.camera_name + '.pgm'
+        thread_conf_file.write("on_event_start echo on %t > " + self.pipe 
+                               + "\n")
+        thread_conf_file.write("on_event_end echo off %t > " + self.pipe 
+                               + "\n")
+        maskfile = os.path.join(config.motion_mask_path, 
+                                self.name + '.pgm')
         if os.path.isfile(maskfile):
             thread_conf_file.write("mask_file " + maskfile + '\n')
             
@@ -78,18 +82,15 @@ class CameraItems:
                 "-segment_format", "mp4",
                 "-reset_timestamps", "1",
                 "-strftime", "1",
-                (self.capture_path + "/" + self.camera_name + "." 
+                (self.capture_path + os.path.sep + self.name + "." 
                  + config.date_time_format + ".mp4")]
         self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, 
                                                 stderr=subprocess.STDOUT)
-        syslog.syslog(2, "Capture started for: " + self.camera_name 
+        syslog.syslog(2, "Capture started for: " + self.name 
                       + " cmd: " + str(_cmd) 
                       + " pid: " + str(self.capture_process.pid))
-            
-    def mark_capture_start(self):
-        self.motion_start_time = datetime.datetime.now()
-        
-    def process_segments(self):
+
+    def process_segments(self, now):
         """ Mark video segments as having motion or not. 
             All segments are linked to the "all" subdir,
             segments with motion are also linked to the "motion" subdir.
@@ -98,7 +99,6 @@ class CameraItems:
             be safe to unlink that segment, but we leave it to make it easy 
             to find that file.
         """
-        now = datetime.datetime.now()
         file_list = os.listdir(self.capture_path)
         newest_file = None
         newest_start_time = None
@@ -115,12 +115,9 @@ class CameraItems:
                     or segment_start_time > newest_start_time):
                     newest_start_time = segment_start_time
                     newest_file = _file
-                    
-                date_stamp = segment_start_time.strftime(
-                    config.directory_date_format)
+
                 motion_file = os.path.join(
-                    config.video_store_path, date_stamp, 
-                    config.video_motion_dir, _file)
+                    get_motion_dir(segment_start_time), _file)
                 
                 if (self.motion_start_time != None and 
                     (self.motion_start_time - config.event_gap <
@@ -140,7 +137,7 @@ class CameraItems:
                 traceback.print_exc()
             
         if newest_file == None:
-            print "No newest file for: " + self.camera_name
+            print "No newest file for: " + self.name
             return
         
         for _file in file_list:
@@ -151,16 +148,16 @@ class CameraItems:
                         pieces[len(pieces)-2], config.date_time_format))
                 date_stamp = (
                     segment_start_time.strftime(config.directory_date_format))
-                destination = (
-                    config.video_store_path + "/" + date_stamp + "/" 
-                    + config.video_all_dir + "/" + _file)
+                destination = os.path.join(config.video_store_path, 
+                                           date_stamp, config.video_all_dir, 
+                                           _file)
+                segment_file = os.path.join(self.capture_path, _file)
                 os_help.ignore_exist(
                     os.makedirs, os.path.dirname(destination))
-                os_help.ignore_exist2(
-                    os.link, self.capture_path + "/" + _file, destination)
+                os_help.ignore_exist2(os.link, segment_file, destination)
                 
                 if (_file != newest_file):
-                    os.unlink(self.capture_path + "/" + _file)
+                    os.unlink(segment_file)
         
             except:
                 syslog.syslog(1, traceback.format_exc())
@@ -169,12 +166,26 @@ class CameraItems:
     def restart_process_if_died(self):
         if self.capture_process.poll() != None:  
             syslog.syslog(1, "ffmpeg capture process died, restarting: " 
-                          + self.camera_name)
+                          + self.name)
             self.start_capture()
         
-    def mark_capture_stop(self):
-        self.process_segments()
-        self.motion_start_time = None
+    def notify_motion(self, motion_is_active, time):
+        # Don't take action if the state didn't change
+        if (self.motion_start_time != None) == motion_is_active:
+            return
+        
+        if motion_is_active:
+            self.motion_start_time = time
+        else:
+            self.process_segments(time)
+            self.motion_start_time = None
+        
+def get_motion_dir(time):
+    date_stamp = time.strftime(config.directory_date_format)
+    motion_dir = os.path.join(config.video_store_path, date_stamp, 
+                              config.video_motion_dir)
+    return motion_dir
+        
 
 def write_base_motion_config_file():
     motion_conf_file = open(os.path.join(
@@ -188,14 +199,14 @@ def write_base_motion_config_file():
     motion_conf_file.write("\n")
 
 def on_change(message, pipe):
-    is_on = (message == "on")
+    global eventlog
+    is_on = (message.split(' ', 1)[0] == "on")
+    now = datetime.datetime.now()
     for camera in camera_item:
-        if (camera.pipe == pipe and 
-            (camera.motion_start_time != None) != is_on):
-            if is_on:
-                camera.mark_capture_start()
-            else:
-                camera.mark_capture_stop()
+        if (camera.pipe == pipe):
+            logfile = (os.path.join(get_motion_dir(now), "motion.log"))
+            eventlog.log(logfile, now, camera.name + ", " + message)
+            camera.notify_motion(is_on, now)
 
 def initialize_cameras():
     write_base_motion_config_file()
@@ -245,7 +256,7 @@ try:
             start_time = now
             
             for camera in camera_item:
-                camera.process_segments()
+                camera.process_segments(now)
                 camera.restart_process_if_died()
             
             if motion_pid.poll() != None:
