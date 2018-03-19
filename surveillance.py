@@ -172,6 +172,7 @@ class CameraItems:
     def notify_motion(self, motion_is_active, time):
         # Don't take action if the state didn't change
         if (self.motion_start_time != None) == motion_is_active:
+            print "Unexpected, no motion transition: " + str(motion_is_active)
             return
         
         if motion_is_active:
