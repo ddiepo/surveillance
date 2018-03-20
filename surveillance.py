@@ -140,7 +140,7 @@ class CameraItems:
             os_help.ignore_exist2(os.link, src, dest)
 
             if (segnum + 1 != len(segments)):
-                os.unlink(segment[1])
+                os.unlink(src)
             
     def restart_process_if_died(self):
         if self.capture_process.poll() != None:  
