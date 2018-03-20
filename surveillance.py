@@ -100,68 +100,47 @@ class CameraItems:
             to find that file.
         """
         file_list = os.listdir(self.capture_path)
-        newest_file = None
-        newest_start_time = None
+        segments = []
         for _file in file_list:
             pieces = _file.split('.')
             if len(pieces) < 2 or pieces[len(pieces)-1] != "mp4":
                 print "Unexpected pieces count: " + str(pieces)
                 continue
-            try:
-                segment_start_time = datetime.datetime.strptime(
-                    pieces[len(pieces)-2], 
-                    config.date_time_format)
-                if (newest_start_time == None 
-                    or segment_start_time > newest_start_time):
-                    newest_start_time = segment_start_time
-                    newest_file = _file
-
-                motion_file = os.path.join(
-                    get_motion_dir(segment_start_time), _file)
-                
-                if (self.motion_start_time != None and 
-                    (self.motion_start_time - config.event_gap <
-                     segment_start_time) and
-                    segment_start_time < now and
-                    not os.path.exists(motion_file)):
-                    
-                    os_help.ignore_exist(
-                        os.makedirs, os.path.dirname(motion_file))
-                    os_help.ignore_exist2(
-                        os.link, 
-                        os.path.join(self.capture_path, _file), 
-                        motion_file)
-                    
-            except:
-                syslog.syslog(1, traceback.format_exc())
-                traceback.print_exc()
             
-        if newest_file == None:
-            print "No newest file for: " + self.name
-            return
-        
-        for _file in file_list:
             try:
-                pieces = _file.split('.')
-                segment_start_time = (
-                    datetime.datetime.strptime(
-                        pieces[len(pieces)-2], config.date_time_format))
-                date_stamp = (
-                    segment_start_time.strftime(config.directory_date_format))
-                destination = os.path.join(config.video_store_path, 
-                                           date_stamp, config.video_all_dir, 
-                                           _file)
-                segment_file = os.path.join(self.capture_path, _file)
-                os_help.ignore_exist(
-                    os.makedirs, os.path.dirname(destination))
-                os_help.ignore_exist2(os.link, segment_file, destination)
-                
-                if (_file != newest_file):
-                    os.unlink(segment_file)
-        
+                start_time = datetime.datetime.strptime(
+                        pieces[len(pieces)-2], 
+                        config.date_time_format)
+                segments.append((start_time, _file))
             except:
                 syslog.syslog(1, traceback.format_exc())
                 traceback.print_exc()
+                
+        # Sort by starting date
+        segments.sort(key=lambda tup: tup[0])
+        
+        for segment in segments:
+            motion_file = os.path.join(get_motion_dir(segment[0]), segment[1])
+            if (self.motion_start_time == None or
+                (self.motion_start_time - config.event_gap >
+                 segment[0] + config.segment_length) or
+                segment[0] > now or
+                os.path.exists(motion_file)):
+                continue
+            
+            os_help.ignore_exist(os.makedirs, os.path.dirname(motion_file))
+            os.link(os.path.join(self.capture_path, segment[1]), motion_file)
+        
+        for segnum, segment in enumerate(segments):
+            date_stamp = (segment[0].strftime(config.directory_date_format))
+            dest = os.path.join(config.video_store_path,
+                                date_stamp, config.video_all_dir, segment[1])
+            src = os.path.join(self.capture_path, segment[1])
+            os_help.ignore_exist(os.makedirs, os.path.dirname(dest))
+            os_help.ignore_exist2(os.link, src, dest)
+
+            if (segnum + 1 != len(segments)):
+                os.unlink(segment[1])
             
     def restart_process_if_died(self):
         if self.capture_process.poll() != None:  
