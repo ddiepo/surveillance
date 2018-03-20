@@ -53,7 +53,7 @@ class CameraItems:
         thread_conf_file = open(os.path.join(
             config.motion_config_path, self.name + '.cfg'), 'w')
         thread_conf_file.write("log_level 4\n")
-        thread_conf_file.write("threshold 400\n") # default 1500
+        thread_conf_file.write("threshold 500\n") # default 1500
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
         thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
         thread_conf_file.write("on_event_start echo on %t > " + self.pipe 
