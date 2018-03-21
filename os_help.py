@@ -1,6 +1,7 @@
 import os
 import errno
 
+
 def ignore_exist(func, path):
     """ Ignore errno.EEXIST or errno.ENOENT exceptions """
     try:
@@ -12,7 +13,8 @@ def ignore_exist(func, path):
             pass
         else:
             raise
-        
+
+
 def ignore_exist2(func, src, dest):
     """ Ignore errno.EEXIST or errno.ENOENT exceptions """
     try:
@@ -22,4 +24,3 @@ def ignore_exist2(func, src, dest):
             pass
         else:
             raise
-        

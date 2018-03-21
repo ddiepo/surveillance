@@ -14,15 +14,17 @@ import disk_usage
 import log_writer
 import surveillance_config as config
 
-_debug=False
+_debug = False
 
 # Global variable to store all our camera stuff
 camera_item = []
 motion_pid = None
 eventlog = log_writer.LogWriter()
 
+
 class CameraItems:
     """ Data structure for storing information about a single camera """
+
     def __init__(self, camera_index):
         self.name = config.cameras[camera_index].name
         self.capture_url = config.cameras[camera_index].record_url
@@ -35,102 +37,100 @@ class CameraItems:
         self.pipe = os.path.join(
             config.working_area, "motion_pipe_cam" + str(self.motion_index))
         self.motion_start_time = None
-        
+
         os_help.ignore_exist(os.makedirs, self.capture_path)
         self.write_motion_config()
         self.start_capture()
         print "Monitoring Camera: " + self.name
-        
-    def cleanup(self):       
+
+    def cleanup(self):
         try:
             self.capture_process.terminate()
-        except:
+        except Exception:
             pass
-        
+
         self.process_segments(datetime.datetime.now())
-    
+
     def write_motion_config(self):
         thread_conf_file = open(os.path.join(
             config.motion_config_path, self.name + '.cfg'), 'w')
         thread_conf_file.write("log_level 4\n")
-        thread_conf_file.write("threshold 500\n") # default 1500
+        thread_conf_file.write("threshold 500\n")  # default 1500
         thread_conf_file.write("netcam_url " + self.monitor_url + '\n')
         thread_conf_file.write("camera_id " + str(self.motion_index) + "\n")
-        thread_conf_file.write("on_event_start echo on %t > " + self.pipe 
-                               + "\n")
-        thread_conf_file.write("on_event_end echo off %t > " + self.pipe 
-                               + "\n")
-        maskfile = os.path.join(config.motion_mask_path, 
+        thread_conf_file.write("on_event_start echo on %t > "
+                               + self.pipe + "\n")
+        thread_conf_file.write("on_event_end echo off %t > "
+                               + self.pipe + "\n")
+        maskfile = os.path.join(config.motion_mask_path,
                                 self.name + '.pgm')
         if os.path.isfile(maskfile):
             thread_conf_file.write("mask_file " + maskfile + '\n')
-            
+
         motion_conf_file = open(os.path.join(
             config.motion_config_path, 'motion.cfg'), 'a')
         motion_conf_file.write("camera " + thread_conf_file.name + '\n')
 
     def start_capture(self):
         FNULL = open(os.devnull, 'w')
-        _cmd = ["ffmpeg", 
+        _cmd = ["ffmpeg",
                 "-rtsp_transport", "tcp",
                 "-stimeout", "2000000",  # TCP Timeout for the stream
                 "-i", self.capture_url,
                 "-c", "copy",
                 "-f", "segment",
-                "-segment_time", str(
-                    config.segment_length.seconds),
+                "-segment_time", str(config.segment_length.seconds),
                 "-segment_format", "mp4",
                 "-reset_timestamps", "1",
                 "-strftime", "1",
-                (self.capture_path + os.path.sep + self.name + "." 
+                (self.capture_path + os.path.sep + self.name + "."
                  + config.date_time_format + ".mp4")]
-        self.capture_process = subprocess.Popen(_cmd, stdout=FNULL, 
+        self.capture_process = subprocess.Popen(_cmd, stdout=FNULL,
                                                 stderr=subprocess.STDOUT)
-        syslog.syslog(2, "Capture started for: " + self.name 
-                      + " cmd: " + str(_cmd) 
+        syslog.syslog(2, "Capture started for: " + self.name
+                      + " cmd: " + str(_cmd)
                       + " pid: " + str(self.capture_process.pid))
 
     def process_segments(self, now):
-        """ Mark video segments as having motion or not. 
+        """ Mark video segments as having motion or not.
             All segments are linked to the "all" subdir,
             segments with motion are also linked to the "motion" subdir.
             Segments are removed from the "unprocessed" dir except if that
-            segment is still the currently-being-written-to segment. It would 
-            be safe to unlink that segment, but we leave it to make it easy 
+            segment is still the currently-being-written-to segment. It would
+            be safe to unlink that segment, but we leave it to make it easy
             to find that file.
         """
         file_list = os.listdir(self.capture_path)
         segments = []
         for _file in file_list:
             pieces = _file.split('.')
-            if len(pieces) < 2 or pieces[len(pieces)-1] != "mp4":
+            if len(pieces) < 2 or pieces[len(pieces) - 1] != "mp4":
                 print "Unexpected pieces count: " + str(pieces)
                 continue
-            
+
             try:
                 start_time = datetime.datetime.strptime(
-                        pieces[len(pieces)-2], 
-                        config.date_time_format)
+                    pieces[len(pieces) - 2], config.date_time_format)
                 segments.append((start_time, _file))
-            except:
+            except Exception:
                 syslog.syslog(1, traceback.format_exc())
                 traceback.print_exc()
-                
+
         # Sort by starting date
         segments.sort(key=lambda tup: tup[0])
-        
+
         for segment in segments:
             motion_file = os.path.join(get_motion_dir(segment[0]), segment[1])
-            if (self.motion_start_time == None or
-                (self.motion_start_time - config.event_gap >
-                 segment[0] + config.segment_length) or
-                segment[0] > now or
-                os.path.exists(motion_file)):
+            if (self.motion_start_time is None
+                    or (self.motion_start_time - config.event_gap >
+                        segment[0] + config.segment_length)
+                    or segment[0] > now
+                    or os.path.exists(motion_file)):
                 continue
-            
+
             os_help.ignore_exist(os.makedirs, os.path.dirname(motion_file))
             os.link(os.path.join(self.capture_path, segment[1]), motion_file)
-        
+
         for segnum, segment in enumerate(segments):
             date_stamp = (segment[0].strftime(config.directory_date_format))
             dest = os.path.join(config.video_store_path,
@@ -141,31 +141,32 @@ class CameraItems:
 
             if (segnum + 1 != len(segments)):
                 os.unlink(src)
-            
+
     def restart_process_if_died(self):
-        if self.capture_process.poll() != None:  
-            syslog.syslog(1, "ffmpeg capture process died, restarting: " 
+        if self.capture_process.poll() is not None:
+            syslog.syslog(1, "ffmpeg capture process died, restarting: "
                           + self.name)
             self.start_capture()
-        
+
     def notify_motion(self, motion_is_active, time):
         # Don't take action if the state didn't change
-        if (self.motion_start_time != None) == motion_is_active:
+        if (self.motion_start_time is not None) == motion_is_active:
             print "Unexpected, no motion transition: " + str(motion_is_active)
             return
-        
+
         if motion_is_active:
             self.motion_start_time = time
         else:
             self.process_segments(time)
             self.motion_start_time = None
-        
+
+
 def get_motion_dir(time):
     date_stamp = time.strftime(config.directory_date_format)
-    motion_dir = os.path.join(config.video_store_path, date_stamp, 
+    motion_dir = os.path.join(config.video_store_path, date_stamp,
                               config.video_motion_dir)
     return motion_dir
-        
+
 
 def write_base_motion_config_file():
     motion_conf_file = open(os.path.join(
@@ -174,9 +175,10 @@ def write_base_motion_config_file():
     motion_conf_file.write("rtsp_uses_tcp on\n")
     # Don't use the motion process to capture:
     motion_conf_file.write("output_pictures off\n")
-    motion_conf_file.write("event_gap " 
+    motion_conf_file.write("event_gap "
                            + str(config.event_gap.seconds) + "\n")
     motion_conf_file.write("\n")
+
 
 def on_change(message, pipe):
     global eventlog
@@ -188,11 +190,13 @@ def on_change(message, pipe):
             eventlog.log(logfile, now, camera.name + ", " + message)
             camera.notify_motion(is_on, now)
 
+
 def initialize_cameras():
     write_base_motion_config_file()
     for index, camera in enumerate(config.cameras):
         _cam = CameraItems(index)
         camera_item.append(_cam)
+
 
 def get_pipes():
     _pipes = []
@@ -200,17 +204,20 @@ def get_pipes():
         _pipes.append(camera.pipe)
     return _pipes
 
+
 def start_motion_detection():
     global motion_pid
     FNULL = open(os.devnull, 'w')
-    _cmd = ["motion", 
+    _cmd = ["motion",
             "-c", os.path.join(config.motion_config_path, "motion.cfg")]
     motion_pid = subprocess.Popen(_cmd, stdout=FNULL, stderr=subprocess.STDOUT)
-    syslog.syslog(2, "Starting motion detection: " + str(_cmd) 
+    syslog.syslog(2, "Starting motion detection: " + str(_cmd)
                   + " pid: " + str(motion_pid.pid))
-    
+
+
 def sighandler(signum, frame):
-    sys.exit("caught signal: " + str(signum));
+    sys.exit("caught signal: " + str(signum))
+
 
 try:
     config.init(sys.argv[1])
@@ -229,39 +236,38 @@ try:
         my_input.check(on_change)
         now = datetime.datetime.now()
         if (now - space_check_time) > config.space_check_rate:
-            space_check_time = now;
+            space_check_time = now
             disk_usage.cleanup()
-        
+
         if (now - start_time) > config.periodic_process_rate:
             start_time = now
-            
+
             for camera in camera_item:
                 camera.process_segments(now)
                 camera.restart_process_if_died()
-            
-            if motion_pid.poll() != None:
+
+            if motion_pid.poll() is not None:
                 syslog.syslog(1, "motion process died, restarting.")
                 start_motion_detection()
 
         else:
             time.sleep(1)
-            
-except:
+
+except Exception:
     traceback.print_exc()
     syslog.syslog(1, traceback.format_exc())
 
 finally:
     print "Shutting down..."
-    if motion_pid != None and motion_pid.poll() == None: 
+    if motion_pid is not None and motion_pid.poll() is None:
         motion_pid.kill()
-    
+
     for camera in camera_item:
         camera.cleanup()
-    
+
     try:
         if not _debug:
             shutil.rmtree(config.motion_config_path, True)
             shutil.rmtree(config.video_unprocessed_path, True)
-    except:
+    except Exception:
         print "Oops, couldn't cleanup"
-
